@@ -16,11 +16,19 @@ Passo 2: Rodar o Script
     Rodar o Script:
         Execute o script como superusuário, especificando a interface de rede e o endereço IP para spoofing. Por exemplo:
 
-`sudo python3 dhcp_dns_spoofer.py enp0s3 192.168.1.100`
+`sudo python3 spoofer.py enp0s3 192.168.1.100`
 
     Aqui, enp0s3 é a interface de rede que será usada para capturar e enviar pacotes. 192.168.1.100 é o endereço IP que será usado para spoofing nas respostas DHCP e DNS.
 
 Testar o Spoofing DHCP:
+
+DHCP Client:
+
+Em outro terminal, execute o seguinte comando para testar com o envio de pacotes DHCP:
+`sudo python3 dhcp_client.py enp0s3 192.168.1.100`
+
+
+Solicitação de IP via DHCP:
 
 Em outro terminal, execute o seguinte comando para solicitar um endereço IP via DHCP:
 `sudo dhclient -v enp0s3`

